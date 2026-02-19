@@ -1,0 +1,21 @@
+# Binary
+calendar-mcp
+
+# Credentials
+*-service-account.json
+service-account*.json
+credentials*.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS
+.DS_Store
+
+# Go
+*.exe
+*.test
+*.out
