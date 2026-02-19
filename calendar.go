@@ -8,7 +8,7 @@ import (
 	"google.golang.org/api/option"
 )
 
-const defaultTimezone = "Asia/Dubai" // GMT+4
+const defaultTimezone = "UTC"
 
 type CalendarClient struct {
 	service    *calendar.Service
@@ -23,7 +23,7 @@ type CalendarEvent struct {
 	End     string `json:"end"`
 }
 
-func NewCalendarClient(credentialsFile, calendarID string) (*CalendarClient, error) {
+func NewCalendarClient(credentialsFile, calendarID, timezone string) (*CalendarClient, error) {
 	ctx := context.Background()
 
 	srv, err := calendar.NewService(ctx,
@@ -34,10 +34,14 @@ func NewCalendarClient(credentialsFile, calendarID string) (*CalendarClient, err
 		return nil, err
 	}
 
+	if timezone == "" {
+		timezone = defaultTimezone
+	}
+
 	return &CalendarClient{
 		service:    srv,
 		calendarID: calendarID,
-		timezone:   defaultTimezone,
+		timezone:   timezone,
 	}, nil
 }
 

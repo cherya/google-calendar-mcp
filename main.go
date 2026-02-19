@@ -14,6 +14,12 @@ import (
 const (
 	serverName    = "google-calendar"
 	serverVersion = "1.0.0"
+
+	toolListEvents      = "list_events"
+	toolListEventsRange = "list_events_range"
+	toolCreateEvent     = "create_event"
+	toolDeleteEvent     = "delete_event"
+	toolEditEvent       = "edit_event"
 )
 
 type JSONRPCRequest struct {
@@ -51,12 +57,13 @@ type Server struct {
 func main() {
 	credentialsFile := os.Getenv("GOOGLE_CREDENTIALS_FILE")
 	calendarID := os.Getenv("CALENDAR_ID")
+	timezone := os.Getenv("CALENDAR_TIMEZONE")
 
 	if credentialsFile == "" || calendarID == "" {
 		log.Fatal("GOOGLE_CREDENTIALS_FILE and CALENDAR_ID environment variables must be set")
 	}
 
-	cal, err := NewCalendarClient(credentialsFile, calendarID)
+	cal, err := NewCalendarClient(credentialsFile, calendarID, timezone)
 	if err != nil {
 		log.Fatalf("Failed to create calendar client: %v", err)
 	}
@@ -67,7 +74,6 @@ func main() {
 
 func (s *Server) run() {
 	scanner := bufio.NewScanner(os.Stdin)
-	// Increase buffer size for large messages
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 1024*1024)
 
@@ -113,7 +119,7 @@ func (s *Server) handleRequest(req JSONRPCRequest) *JSONRPCResponse {
 	case "initialize":
 		return s.handleInitialize(req)
 	case "initialized":
-		return nil // notification, no response
+		return nil
 	case "tools/list":
 		return s.handleToolsList(req)
 	case "tools/call":
@@ -150,7 +156,7 @@ func (s *Server) handleInitialize(req JSONRPCRequest) *JSONRPCResponse {
 func (s *Server) handleToolsList(req JSONRPCRequest) *JSONRPCResponse {
 	tools := []map[string]interface{}{
 		{
-			"name":        "list_events",
+			"name":        toolListEvents,
 			"description": "List calendar events for the next N days",
 			"inputSchema": map[string]interface{}{
 				"type": "object",
@@ -164,7 +170,7 @@ func (s *Server) handleToolsList(req JSONRPCRequest) *JSONRPCResponse {
 			},
 		},
 		{
-			"name":        "list_events_range",
+			"name":        toolListEventsRange,
 			"description": "List calendar events between two dates",
 			"inputSchema": map[string]interface{}{
 				"type": "object",
@@ -182,7 +188,7 @@ func (s *Server) handleToolsList(req JSONRPCRequest) *JSONRPCResponse {
 			},
 		},
 		{
-			"name":        "create_event",
+			"name":        toolCreateEvent,
 			"description": "Create a new calendar event",
 			"inputSchema": map[string]interface{}{
 				"type": "object",
@@ -212,28 +218,28 @@ func (s *Server) handleToolsList(req JSONRPCRequest) *JSONRPCResponse {
 			},
 		},
 		{
-			"name":        "delete_event",
+			"name":        toolDeleteEvent,
 			"description": "Delete a calendar event",
 			"inputSchema": map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"event_id": map[string]interface{}{
 						"type":        "string",
-						"description": "Event ID to delete (from list_events)",
+						"description": "Event ID to delete (use list_events to find IDs)",
 					},
 				},
 				"required": []string{"event_id"},
 			},
 		},
 		{
-			"name":        "edit_event",
+			"name":        toolEditEvent,
 			"description": "Edit an existing calendar event",
 			"inputSchema": map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"event_id": map[string]interface{}{
 						"type":        "string",
-						"description": "Event ID to edit (from list_events)",
+						"description": "Event ID to edit (use list_events to find IDs)",
 					},
 					"summary": map[string]interface{}{
 						"type":        "string",
@@ -291,15 +297,15 @@ func (s *Server) handleToolsCall(req JSONRPCRequest) *JSONRPCResponse {
 	ctx := context.Background()
 
 	switch params.Name {
-	case "list_events":
+	case toolListEvents:
 		return s.callListEvents(ctx, req.ID, params.Arguments)
-	case "list_events_range":
+	case toolListEventsRange:
 		return s.callListEventsRange(ctx, req.ID, params.Arguments)
-	case "create_event":
+	case toolCreateEvent:
 		return s.callCreateEvent(ctx, req.ID, params.Arguments)
-	case "delete_event":
+	case toolDeleteEvent:
 		return s.callDeleteEvent(ctx, req.ID, params.Arguments)
-	case "edit_event":
+	case toolEditEvent:
 		return s.callEditEvent(ctx, req.ID, params.Arguments)
 	default:
 		return &JSONRPCResponse{
@@ -317,7 +323,7 @@ func (s *Server) callListEvents(ctx context.Context, id interface{}, args json.R
 	var input struct {
 		Days int `json:"days"`
 	}
-	input.Days = 7 // default
+	input.Days = 7
 
 	if len(args) > 0 {
 		json.Unmarshal(args, &input)
@@ -342,26 +348,11 @@ func (s *Server) callListEventsRange(ctx context.Context, id interface{}, args j
 	}
 
 	if err := json.Unmarshal(args, &input); err != nil {
-		return &JSONRPCResponse{
-			JSONRPC: "2.0",
-			ID:      id,
-			Error: &RPCError{
-				Code:    -32602,
-				Message: "Invalid arguments",
-				Data:    err.Error(),
-			},
-		}
+		return s.paramError(id, "Invalid arguments", err.Error())
 	}
 
 	if input.StartDate == "" || input.EndDate == "" {
-		return &JSONRPCResponse{
-			JSONRPC: "2.0",
-			ID:      id,
-			Error: &RPCError{
-				Code:    -32602,
-				Message: "start_date and end_date are required",
-			},
-		}
+		return s.paramError(id, "start_date and end_date are required", nil)
 	}
 
 	events, err := s.calendar.ListEventsRange(ctx, input.StartDate, input.EndDate)
@@ -382,26 +373,11 @@ func (s *Server) callCreateEvent(ctx context.Context, id interface{}, args json.
 	}
 
 	if err := json.Unmarshal(args, &input); err != nil {
-		return &JSONRPCResponse{
-			JSONRPC: "2.0",
-			ID:      id,
-			Error: &RPCError{
-				Code:    -32602,
-				Message: "Invalid arguments",
-				Data:    err.Error(),
-			},
-		}
+		return s.paramError(id, "Invalid arguments", err.Error())
 	}
 
 	if input.Summary == "" || input.Date == "" || input.StartTime == "" || input.EndTime == "" {
-		return &JSONRPCResponse{
-			JSONRPC: "2.0",
-			ID:      id,
-			Error: &RPCError{
-				Code:    -32602,
-				Message: "summary, date, start_time, and end_time are required",
-			},
-		}
+		return s.paramError(id, "summary, date, start_time, and end_time are required", nil)
 	}
 
 	event, err := s.calendar.CreateEvent(ctx, input.Summary, input.Description, input.Date, input.StartTime, input.EndTime)
@@ -410,7 +386,6 @@ func (s *Server) callCreateEvent(ctx context.Context, id interface{}, args json.
 	}
 
 	result := fmt.Sprintf("Event created successfully!\nID: %s\nLink: %s", event.Id, event.HtmlLink)
-
 	return s.successResponse(id, result)
 }
 
@@ -420,26 +395,11 @@ func (s *Server) callDeleteEvent(ctx context.Context, id interface{}, args json.
 	}
 
 	if err := json.Unmarshal(args, &input); err != nil {
-		return &JSONRPCResponse{
-			JSONRPC: "2.0",
-			ID:      id,
-			Error: &RPCError{
-				Code:    -32602,
-				Message: "Invalid arguments",
-				Data:    err.Error(),
-			},
-		}
+		return s.paramError(id, "Invalid arguments", err.Error())
 	}
 
 	if input.EventID == "" {
-		return &JSONRPCResponse{
-			JSONRPC: "2.0",
-			ID:      id,
-			Error: &RPCError{
-				Code:    -32602,
-				Message: "event_id is required",
-			},
-		}
+		return s.paramError(id, "event_id is required (use list_events to find event IDs)", nil)
 	}
 
 	if err := s.calendar.DeleteEvent(ctx, input.EventID); err != nil {
@@ -460,26 +420,11 @@ func (s *Server) callEditEvent(ctx context.Context, id interface{}, args json.Ra
 	}
 
 	if err := json.Unmarshal(args, &input); err != nil {
-		return &JSONRPCResponse{
-			JSONRPC: "2.0",
-			ID:      id,
-			Error: &RPCError{
-				Code:    -32602,
-				Message: "Invalid arguments",
-				Data:    err.Error(),
-			},
-		}
+		return s.paramError(id, "Invalid arguments", err.Error())
 	}
 
 	if input.EventID == "" {
-		return &JSONRPCResponse{
-			JSONRPC: "2.0",
-			ID:      id,
-			Error: &RPCError{
-				Code:    -32602,
-				Message: "event_id is required",
-			},
-		}
+		return s.paramError(id, "event_id is required (use list_events to find event IDs)", nil)
 	}
 
 	updates := EventUpdates{
@@ -496,7 +441,6 @@ func (s *Server) callEditEvent(ctx context.Context, id interface{}, args json.Ra
 	}
 
 	result := fmt.Sprintf("Event updated successfully!\nID: %s\nSummary: %s\nLink: %s", event.Id, event.Summary, event.HtmlLink)
-
 	return s.successResponse(id, result)
 }
 
@@ -534,6 +478,18 @@ func (s *Server) errorResponse(id interface{}, err error) *JSONRPCResponse {
 				{"type": "text", "text": fmt.Sprintf("Error: %v", err)},
 			},
 			"isError": true,
+		},
+	}
+}
+
+func (s *Server) paramError(id interface{}, message string, data interface{}) *JSONRPCResponse {
+	return &JSONRPCResponse{
+		JSONRPC: "2.0",
+		ID:      id,
+		Error: &RPCError{
+			Code:    -32602,
+			Message: message,
+			Data:    data,
 		},
 	}
 }

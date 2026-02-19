@@ -32,6 +32,7 @@ go build -o calendar-mcp
 
 - `GOOGLE_CREDENTIALS_FILE` — path to the service account JSON key
 - `CALENDAR_ID` — Google Calendar ID (usually your email address)
+- `CALENDAR_TIMEZONE` — IANA timezone (e.g. `Europe/Berlin`), defaults to `UTC`
 
 ## Usage with Claude Desktop
 
@@ -44,16 +45,13 @@ Add to your `claude_desktop_config.json`:
       "command": "/path/to/calendar-mcp",
       "env": {
         "GOOGLE_CREDENTIALS_FILE": "/path/to/service-account.json",
-        "CALENDAR_ID": "your-email@gmail.com"
+        "CALENDAR_ID": "your-email@gmail.com",
+        "CALENDAR_TIMEZONE": "America/New_York"
       }
     }
   }
 }
 ```
-
-## Configuration
-
-The default timezone is `Asia/Dubai` (GMT+4). To change it, edit the `defaultTimezone` constant in `calendar.go`.
 
 ## License
 
