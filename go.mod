@@ -1,4 +1,4 @@
-module calendar-mcp
+module github.com/cherya/google-calendar-mcp
 
 go 1.24.0
 

@@ -22,10 +22,18 @@ MCP server for Google Calendar. Runs over stdio using JSON-RPC 2.0.
 
 Follow [docs/google-service-account-setup.md](docs/google-service-account-setup.md) to create a service account and get the JSON key file.
 
-### 2. Build
+### 2. Install
 
+```bash
+go install github.com/cherya/google-calendar-mcp@latest
 ```
-go build -o calendar-mcp
+
+Or build from source:
+
+```bash
+git clone https://github.com/cherya/google-calendar-mcp.git
+cd google-calendar-mcp
+go build -o google-calendar-mcp .
 ```
 
 ### 3. Environment Variables
@@ -42,7 +50,7 @@ Add to your `claude_desktop_config.json`:
 {
   "mcpServers": {
     "google-calendar": {
-      "command": "/path/to/calendar-mcp",
+      "command": "google-calendar-mcp",
       "env": {
         "GOOGLE_CREDENTIALS_FILE": "/path/to/service-account.json",
         "CALENDAR_ID": "your-email@gmail.com",
