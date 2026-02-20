@@ -23,6 +23,13 @@ type CalendarEvent struct {
 	End     string `json:"end"`
 }
 
+type CalendarInfo struct {
+	ID          string `json:"id"`
+	Summary     string `json:"summary"`
+	Description string `json:"description"`
+	Primary     bool   `json:"primary"`
+}
+
 func NewCalendarClient(credentialsFile, calendarID, timezone string) (*CalendarClient, error) {
 	ctx := context.Background()
 
@@ -45,8 +52,15 @@ func NewCalendarClient(credentialsFile, calendarID, timezone string) (*CalendarC
 	}, nil
 }
 
+func (c *CalendarClient) resolveCalendarID(calendarID string) string {
+	if calendarID != "" {
+		return calendarID
+	}
+	return c.calendarID
+}
+
 // ListEventsForDays returns events for the next N days
-func (c *CalendarClient) ListEventsForDays(ctx context.Context, days int) ([]CalendarEvent, error) {
+func (c *CalendarClient) ListEventsForDays(ctx context.Context, calendarID string, days int) ([]CalendarEvent, error) {
 	loc, err := time.LoadLocation(c.timezone)
 	if err != nil {
 		loc = time.UTC
@@ -56,11 +70,11 @@ func (c *CalendarClient) ListEventsForDays(ctx context.Context, days int) ([]Cal
 	timeMin := now.Format(time.RFC3339)
 	timeMax := now.AddDate(0, 0, days).Format(time.RFC3339)
 
-	return c.listEvents(ctx, timeMin, timeMax, 100)
+	return c.listEvents(ctx, calendarID, timeMin, timeMax, 100)
 }
 
 // ListEventsRange returns events between two dates (YYYY-MM-DD format)
-func (c *CalendarClient) ListEventsRange(ctx context.Context, startDate, endDate string) ([]CalendarEvent, error) {
+func (c *CalendarClient) ListEventsRange(ctx context.Context, calendarID string, startDate, endDate string) ([]CalendarEvent, error) {
 	loc, err := time.LoadLocation(c.timezone)
 	if err != nil {
 		loc = time.UTC
@@ -82,11 +96,11 @@ func (c *CalendarClient) ListEventsRange(ctx context.Context, startDate, endDate
 	timeMin := start.Format(time.RFC3339)
 	timeMax := end.Format(time.RFC3339)
 
-	return c.listEvents(ctx, timeMin, timeMax, 100)
+	return c.listEvents(ctx, calendarID, timeMin, timeMax, 100)
 }
 
-func (c *CalendarClient) listEvents(ctx context.Context, timeMin, timeMax string, maxResults int) ([]CalendarEvent, error) {
-	call := c.service.Events.List(c.calendarID).
+func (c *CalendarClient) listEvents(ctx context.Context, calendarID string, timeMin, timeMax string, maxResults int) ([]CalendarEvent, error) {
+	call := c.service.Events.List(c.resolveCalendarID(calendarID)).
 		SingleEvents(true).
 		OrderBy("startTime").
 		MaxResults(int64(maxResults)).
@@ -121,7 +135,7 @@ func (c *CalendarClient) listEvents(ctx context.Context, timeMin, timeMax string
 
 // CreateEvent creates a new calendar event
 // date: YYYY-MM-DD, startTime/endTime: HH:MM
-func (c *CalendarClient) CreateEvent(ctx context.Context, summary, description, date, startTime, endTime string) (*calendar.Event, error) {
+func (c *CalendarClient) CreateEvent(ctx context.Context, calendarID string, summary, description, date, startTime, endTime string) (*calendar.Event, error) {
 	loc, err := time.LoadLocation(c.timezone)
 	if err != nil {
 		loc = time.UTC
@@ -153,7 +167,7 @@ func (c *CalendarClient) CreateEvent(ctx context.Context, summary, description, 
 		},
 	}
 
-	return c.service.Events.Insert(c.calendarID, event).Context(ctx).Do()
+	return c.service.Events.Insert(c.resolveCalendarID(calendarID), event).Context(ctx).Do()
 }
 
 // EventUpdates contains optional fields to update
@@ -166,9 +180,9 @@ type EventUpdates struct {
 }
 
 // UpdateEvent updates an existing calendar event
-func (c *CalendarClient) UpdateEvent(ctx context.Context, eventID string, updates EventUpdates) (*calendar.Event, error) {
+func (c *CalendarClient) UpdateEvent(ctx context.Context, calendarID string, eventID string, updates EventUpdates) (*calendar.Event, error) {
 	// First, get the existing event
-	existing, err := c.service.Events.Get(c.calendarID, eventID).Context(ctx).Do()
+	existing, err := c.service.Events.Get(c.resolveCalendarID(calendarID), eventID).Context(ctx).Do()
 	if err != nil {
 		return nil, err
 	}
@@ -241,10 +255,29 @@ func (c *CalendarClient) UpdateEvent(ctx context.Context, eventID string, update
 		}
 	}
 
-	return c.service.Events.Update(c.calendarID, eventID, existing).Context(ctx).Do()
+	return c.service.Events.Update(c.resolveCalendarID(calendarID), eventID, existing).Context(ctx).Do()
 }
 
 // DeleteEvent deletes a calendar event
-func (c *CalendarClient) DeleteEvent(ctx context.Context, eventID string) error {
-	return c.service.Events.Delete(c.calendarID, eventID).Context(ctx).Do()
+func (c *CalendarClient) DeleteEvent(ctx context.Context, calendarID string, eventID string) error {
+	return c.service.Events.Delete(c.resolveCalendarID(calendarID), eventID).Context(ctx).Do()
+}
+
+// ListCalendars returns all calendars accessible by the service account
+func (c *CalendarClient) ListCalendars(ctx context.Context) ([]CalendarInfo, error) {
+	res, err := c.service.CalendarList.List().Context(ctx).Do()
+	if err != nil {
+		return nil, err
+	}
+
+	calendars := make([]CalendarInfo, 0, len(res.Items))
+	for _, cal := range res.Items {
+		calendars = append(calendars, CalendarInfo{
+			ID:          cal.Id,
+			Summary:     cal.Summary,
+			Description: cal.Description,
+			Primary:     cal.Primary,
+		})
+	}
+	return calendars, nil
 }
