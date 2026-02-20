@@ -422,6 +422,22 @@ func TestCallListCalendars_Empty(t *testing.T) {
 	}
 }
 
+func TestCallListEventsRange_WithCalendarID(t *testing.T) {
+	fake := &fakeCalendar{}
+	s := newTestServer(fake)
+
+	args, _ := json.Marshal(map[string]interface{}{
+		"start_date":  "2026-03-15",
+		"end_date":    "2026-03-16",
+		"calendar_id": "other@gmail.com",
+	})
+	s.callListEventsRange(context.Background(), float64(1), args)
+
+	if fake.lastCalendarID != "other@gmail.com" {
+		t.Errorf("expected calendarID 'other@gmail.com', got %q", fake.lastCalendarID)
+	}
+}
+
 func TestCallListEvents_WithCalendarID(t *testing.T) {
 	fake := &fakeCalendar{events: []CalendarEvent{}}
 	s := newTestServer(fake)
