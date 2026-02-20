@@ -15,6 +15,7 @@ const (
 	serverName    = "google-calendar"
 	serverVersion = "1.0.0"
 
+	toolListCalendars   = "list_calendars"
 	toolListEvents      = "list_events"
 	toolListEventsRange = "list_events_range"
 	toolCreateEvent     = "create_event"
@@ -43,11 +44,12 @@ type RPCError struct {
 }
 
 type CalendarService interface {
-	ListEventsForDays(ctx context.Context, days int) ([]CalendarEvent, error)
-	ListEventsRange(ctx context.Context, startDate, endDate string) ([]CalendarEvent, error)
-	CreateEvent(ctx context.Context, summary, description, date, startTime, endTime string) (*calendar.Event, error)
-	UpdateEvent(ctx context.Context, eventID string, updates EventUpdates) (*calendar.Event, error)
-	DeleteEvent(ctx context.Context, eventID string) error
+	ListCalendars(ctx context.Context) ([]CalendarInfo, error)
+	ListEventsForDays(ctx context.Context, calendarID string, days int) ([]CalendarEvent, error)
+	ListEventsRange(ctx context.Context, calendarID string, startDate, endDate string) ([]CalendarEvent, error)
+	CreateEvent(ctx context.Context, calendarID string, summary, description, date, startTime, endTime string) (*calendar.Event, error)
+	UpdateEvent(ctx context.Context, calendarID string, eventID string, updates EventUpdates) (*calendar.Event, error)
+	DeleteEvent(ctx context.Context, calendarID string, eventID string) error
 }
 
 type Server struct {
@@ -154,7 +156,20 @@ func (s *Server) handleInitialize(req JSONRPCRequest) *JSONRPCResponse {
 }
 
 func (s *Server) handleToolsList(req JSONRPCRequest) *JSONRPCResponse {
+	calendarIDProp := map[string]interface{}{
+		"type":        "string",
+		"description": "Calendar ID to use (optional, defaults to the primary calendar configured via CALENDAR_ID env var)",
+	}
+
 	tools := []map[string]interface{}{
+		{
+			"name":        toolListCalendars,
+			"description": "List all calendars accessible by the service account",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
 		{
 			"name":        toolListEvents,
 			"description": "List calendar events for the next N days",
@@ -166,6 +181,7 @@ func (s *Server) handleToolsList(req JSONRPCRequest) *JSONRPCResponse {
 						"description": "Number of days to look ahead (default: 7)",
 						"default":     7,
 					},
+					"calendar_id": calendarIDProp,
 				},
 			},
 		},
@@ -183,6 +199,7 @@ func (s *Server) handleToolsList(req JSONRPCRequest) *JSONRPCResponse {
 						"type":        "string",
 						"description": "End date in YYYY-MM-DD format",
 					},
+					"calendar_id": calendarIDProp,
 				},
 				"required": []string{"start_date", "end_date"},
 			},
@@ -213,6 +230,7 @@ func (s *Server) handleToolsList(req JSONRPCRequest) *JSONRPCResponse {
 						"type":        "string",
 						"description": "Event description (optional)",
 					},
+					"calendar_id": calendarIDProp,
 				},
 				"required": []string{"summary", "date", "start_time", "end_time"},
 			},
@@ -227,6 +245,7 @@ func (s *Server) handleToolsList(req JSONRPCRequest) *JSONRPCResponse {
 						"type":        "string",
 						"description": "Event ID to delete (use list_events to find IDs)",
 					},
+					"calendar_id": calendarIDProp,
 				},
 				"required": []string{"event_id"},
 			},
@@ -261,6 +280,7 @@ func (s *Server) handleToolsList(req JSONRPCRequest) *JSONRPCResponse {
 						"type":        "string",
 						"description": "New end time in HH:MM format (optional)",
 					},
+					"calendar_id": calendarIDProp,
 				},
 				"required": []string{"event_id"},
 			},
@@ -297,6 +317,8 @@ func (s *Server) handleToolsCall(req JSONRPCRequest) *JSONRPCResponse {
 	ctx := context.Background()
 
 	switch params.Name {
+	case toolListCalendars:
+		return s.callListCalendars(ctx, req.ID)
 	case toolListEvents:
 		return s.callListEvents(ctx, req.ID, params.Arguments)
 	case toolListEventsRange:
@@ -319,9 +341,19 @@ func (s *Server) handleToolsCall(req JSONRPCRequest) *JSONRPCResponse {
 	}
 }
 
+func (s *Server) callListCalendars(ctx context.Context, id interface{}) *JSONRPCResponse {
+	calendars, err := s.calendar.ListCalendars(ctx)
+	if err != nil {
+		return s.errorResponse(id, err)
+	}
+
+	return s.successResponse(id, s.formatCalendars(calendars))
+}
+
 func (s *Server) callListEvents(ctx context.Context, id interface{}, args json.RawMessage) *JSONRPCResponse {
 	var input struct {
-		Days int `json:"days"`
+		Days       int    `json:"days"`
+		CalendarID string `json:"calendar_id"`
 	}
 	input.Days = 7
 
@@ -333,7 +365,7 @@ func (s *Server) callListEvents(ctx context.Context, id interface{}, args json.R
 		input.Days = 7
 	}
 
-	events, err := s.calendar.ListEventsForDays(ctx, input.Days)
+	events, err := s.calendar.ListEventsForDays(ctx, input.CalendarID, input.Days)
 	if err != nil {
 		return s.errorResponse(id, err)
 	}
@@ -343,8 +375,9 @@ func (s *Server) callListEvents(ctx context.Context, id interface{}, args json.R
 
 func (s *Server) callListEventsRange(ctx context.Context, id interface{}, args json.RawMessage) *JSONRPCResponse {
 	var input struct {
-		StartDate string `json:"start_date"`
-		EndDate   string `json:"end_date"`
+		StartDate  string `json:"start_date"`
+		EndDate    string `json:"end_date"`
+		CalendarID string `json:"calendar_id"`
 	}
 
 	if err := json.Unmarshal(args, &input); err != nil {
@@ -355,7 +388,7 @@ func (s *Server) callListEventsRange(ctx context.Context, id interface{}, args j
 		return s.paramError(id, "start_date and end_date are required", nil)
 	}
 
-	events, err := s.calendar.ListEventsRange(ctx, input.StartDate, input.EndDate)
+	events, err := s.calendar.ListEventsRange(ctx, input.CalendarID, input.StartDate, input.EndDate)
 	if err != nil {
 		return s.errorResponse(id, err)
 	}
@@ -370,6 +403,7 @@ func (s *Server) callCreateEvent(ctx context.Context, id interface{}, args json.
 		StartTime   string `json:"start_time"`
 		EndTime     string `json:"end_time"`
 		Description string `json:"description"`
+		CalendarID  string `json:"calendar_id"`
 	}
 
 	if err := json.Unmarshal(args, &input); err != nil {
@@ -380,7 +414,7 @@ func (s *Server) callCreateEvent(ctx context.Context, id interface{}, args json.
 		return s.paramError(id, "summary, date, start_time, and end_time are required", nil)
 	}
 
-	event, err := s.calendar.CreateEvent(ctx, input.Summary, input.Description, input.Date, input.StartTime, input.EndTime)
+	event, err := s.calendar.CreateEvent(ctx, input.CalendarID, input.Summary, input.Description, input.Date, input.StartTime, input.EndTime)
 	if err != nil {
 		return s.errorResponse(id, err)
 	}
@@ -391,7 +425,8 @@ func (s *Server) callCreateEvent(ctx context.Context, id interface{}, args json.
 
 func (s *Server) callDeleteEvent(ctx context.Context, id interface{}, args json.RawMessage) *JSONRPCResponse {
 	var input struct {
-		EventID string `json:"event_id"`
+		EventID    string `json:"event_id"`
+		CalendarID string `json:"calendar_id"`
 	}
 
 	if err := json.Unmarshal(args, &input); err != nil {
@@ -402,7 +437,7 @@ func (s *Server) callDeleteEvent(ctx context.Context, id interface{}, args json.
 		return s.paramError(id, "event_id is required (use list_events to find event IDs)", nil)
 	}
 
-	if err := s.calendar.DeleteEvent(ctx, input.EventID); err != nil {
+	if err := s.calendar.DeleteEvent(ctx, input.CalendarID, input.EventID); err != nil {
 		return s.errorResponse(id, err)
 	}
 
@@ -417,6 +452,7 @@ func (s *Server) callEditEvent(ctx context.Context, id interface{}, args json.Ra
 		Date        *string `json:"date"`
 		StartTime   *string `json:"start_time"`
 		EndTime     *string `json:"end_time"`
+		CalendarID  string  `json:"calendar_id"`
 	}
 
 	if err := json.Unmarshal(args, &input); err != nil {
@@ -435,13 +471,33 @@ func (s *Server) callEditEvent(ctx context.Context, id interface{}, args json.Ra
 		EndTime:     input.EndTime,
 	}
 
-	event, err := s.calendar.UpdateEvent(ctx, input.EventID, updates)
+	event, err := s.calendar.UpdateEvent(ctx, input.CalendarID, input.EventID, updates)
 	if err != nil {
 		return s.errorResponse(id, err)
 	}
 
 	result := fmt.Sprintf("Event updated successfully!\nID: %s\nSummary: %s\nLink: %s", event.Id, event.Summary, event.HtmlLink)
 	return s.successResponse(id, result)
+}
+
+func (s *Server) formatCalendars(calendars []CalendarInfo) string {
+	if len(calendars) == 0 {
+		return "No calendars found."
+	}
+
+	result := fmt.Sprintf("Found %d calendar(s):\n\n", len(calendars))
+	for _, c := range calendars {
+		primary := ""
+		if c.Primary {
+			primary = " (primary)"
+		}
+		desc := ""
+		if c.Description != "" {
+			desc = "\n  Description: " + c.Description
+		}
+		result += fmt.Sprintf("- %s%s\n  ID: %s%s\n\n", c.Summary, primary, c.ID, desc)
+	}
+	return result
 }
 
 func (s *Server) formatEvents(events []CalendarEvent) string {

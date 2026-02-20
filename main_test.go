@@ -10,37 +10,49 @@ import (
 
 // fakeCalendar implements CalendarService for testing
 type fakeCalendar struct {
-	events      []CalendarEvent
-	err         error
-	created     *calendar.Event
-	updated     *calendar.Event
-	lastDays    int
-	lastStart   string
-	lastEnd     string
-	deletedID   string
-	deleteErr   error
+	events         []CalendarEvent
+	err            error
+	created        *calendar.Event
+	updated        *calendar.Event
+	lastDays       int
+	lastStart      string
+	lastEnd        string
+	lastCalendarID string
+	deletedID      string
+	deleteErr      error
+	calendars      []CalendarInfo
+	calendarsErr   error
 }
 
-func (f *fakeCalendar) ListEventsForDays(_ context.Context, days int) ([]CalendarEvent, error) {
+func (f *fakeCalendar) ListCalendars(_ context.Context) ([]CalendarInfo, error) {
+	return f.calendars, f.calendarsErr
+}
+
+func (f *fakeCalendar) ListEventsForDays(_ context.Context, calendarID string, days int) ([]CalendarEvent, error) {
+	f.lastCalendarID = calendarID
 	f.lastDays = days
 	return f.events, f.err
 }
 
-func (f *fakeCalendar) ListEventsRange(_ context.Context, start, end string) ([]CalendarEvent, error) {
+func (f *fakeCalendar) ListEventsRange(_ context.Context, calendarID string, start, end string) ([]CalendarEvent, error) {
+	f.lastCalendarID = calendarID
 	f.lastStart = start
 	f.lastEnd = end
 	return f.events, f.err
 }
 
-func (f *fakeCalendar) CreateEvent(_ context.Context, summary, description, date, startTime, endTime string) (*calendar.Event, error) {
+func (f *fakeCalendar) CreateEvent(_ context.Context, calendarID string, summary, description, date, startTime, endTime string) (*calendar.Event, error) {
+	f.lastCalendarID = calendarID
 	return f.created, f.err
 }
 
-func (f *fakeCalendar) UpdateEvent(_ context.Context, eventID string, updates EventUpdates) (*calendar.Event, error) {
+func (f *fakeCalendar) UpdateEvent(_ context.Context, calendarID string, eventID string, updates EventUpdates) (*calendar.Event, error) {
+	f.lastCalendarID = calendarID
 	return f.updated, f.err
 }
 
-func (f *fakeCalendar) DeleteEvent(_ context.Context, eventID string) error {
+func (f *fakeCalendar) DeleteEvent(_ context.Context, calendarID string, eventID string) error {
+	f.lastCalendarID = calendarID
 	f.deletedID = eventID
 	return f.deleteErr
 }
@@ -110,7 +122,7 @@ func TestHandleToolsList(t *testing.T) {
 	result := resp.Result.(map[string]interface{})
 	tools := result["tools"].([]map[string]interface{})
 
-	expectedTools := []string{"list_events", "list_events_range", "create_event", "delete_event", "edit_event"}
+	expectedTools := []string{"list_calendars", "list_events", "list_events_range", "create_event", "delete_event", "edit_event"}
 	if len(tools) != len(expectedTools) {
 		t.Fatalf("expected %d tools, got %d", len(expectedTools), len(tools))
 	}
@@ -362,6 +374,147 @@ func TestFormatEvents_Multiple(t *testing.T) {
 		if !contains(text, e.ID) {
 			t.Errorf("expected text to contain ID %q", e.ID)
 		}
+	}
+}
+
+func TestCallListCalendars(t *testing.T) {
+	fake := &fakeCalendar{
+		calendars: []CalendarInfo{
+			{ID: "primary@gmail.com", Summary: "Primary Calendar", Primary: true},
+			{ID: "work@group.calendar.google.com", Summary: "Work"},
+		},
+	}
+	s := newTestServer(fake)
+
+	resp := s.callListCalendars(context.Background(), float64(1))
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %v", resp.Error)
+	}
+
+	result := resp.Result.(map[string]interface{})
+	content := result["content"].([]map[string]string)
+	text := content[0]["text"]
+
+	if !contains(text, "primary@gmail.com") {
+		t.Error("expected response to contain primary calendar ID")
+	}
+	if !contains(text, "Work") {
+		t.Error("expected response to contain Work calendar")
+	}
+	if !contains(text, "(primary)") {
+		t.Error("expected response to mark primary calendar")
+	}
+}
+
+func TestCallListCalendars_Empty(t *testing.T) {
+	fake := &fakeCalendar{calendars: []CalendarInfo{}}
+	s := newTestServer(fake)
+
+	resp := s.callListCalendars(context.Background(), float64(1))
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %v", resp.Error)
+	}
+
+	result := resp.Result.(map[string]interface{})
+	content := result["content"].([]map[string]string)
+	if content[0]["text"] != "No calendars found." {
+		t.Errorf("expected 'No calendars found.', got %q", content[0]["text"])
+	}
+}
+
+func TestCallListEventsRange_WithCalendarID(t *testing.T) {
+	fake := &fakeCalendar{}
+	s := newTestServer(fake)
+
+	args, _ := json.Marshal(map[string]interface{}{
+		"start_date":  "2026-03-15",
+		"end_date":    "2026-03-16",
+		"calendar_id": "other@gmail.com",
+	})
+	s.callListEventsRange(context.Background(), float64(1), args)
+
+	if fake.lastCalendarID != "other@gmail.com" {
+		t.Errorf("expected calendarID 'other@gmail.com', got %q", fake.lastCalendarID)
+	}
+}
+
+func TestCallListEvents_WithCalendarID(t *testing.T) {
+	fake := &fakeCalendar{events: []CalendarEvent{}}
+	s := newTestServer(fake)
+
+	args, _ := json.Marshal(map[string]interface{}{
+		"days":        3,
+		"calendar_id": "other@group.calendar.google.com",
+	})
+	s.callListEvents(context.Background(), float64(1), args)
+
+	if fake.lastCalendarID != "other@group.calendar.google.com" {
+		t.Errorf("expected calendarID 'other@group.calendar.google.com', got %q", fake.lastCalendarID)
+	}
+}
+
+func TestCallListEvents_WithoutCalendarID(t *testing.T) {
+	fake := &fakeCalendar{events: []CalendarEvent{}}
+	s := newTestServer(fake)
+
+	args, _ := json.Marshal(map[string]int{"days": 3})
+	s.callListEvents(context.Background(), float64(1), args)
+
+	if fake.lastCalendarID != "" {
+		t.Errorf("expected empty calendarID (default), got %q", fake.lastCalendarID)
+	}
+}
+
+func TestCallCreateEvent_WithCalendarID(t *testing.T) {
+	fake := &fakeCalendar{
+		created: &calendar.Event{Id: "new-id", HtmlLink: "https://calendar.google.com/event/new-id"},
+	}
+	s := newTestServer(fake)
+
+	args, _ := json.Marshal(map[string]interface{}{
+		"summary":     "Test",
+		"date":        "2026-03-15",
+		"start_time":  "10:00",
+		"end_time":    "11:00",
+		"calendar_id": "other@gmail.com",
+	})
+	s.callCreateEvent(context.Background(), float64(1), args)
+
+	if fake.lastCalendarID != "other@gmail.com" {
+		t.Errorf("expected calendarID 'other@gmail.com', got %q", fake.lastCalendarID)
+	}
+}
+
+func TestCallDeleteEvent_WithCalendarID(t *testing.T) {
+	fake := &fakeCalendar{}
+	s := newTestServer(fake)
+
+	args, _ := json.Marshal(map[string]interface{}{
+		"event_id":    "evt-1",
+		"calendar_id": "other@gmail.com",
+	})
+	s.callDeleteEvent(context.Background(), float64(1), args)
+
+	if fake.lastCalendarID != "other@gmail.com" {
+		t.Errorf("expected calendarID 'other@gmail.com', got %q", fake.lastCalendarID)
+	}
+}
+
+func TestCallEditEvent_WithCalendarID(t *testing.T) {
+	fake := &fakeCalendar{
+		updated: &calendar.Event{Id: "evt-1", Summary: "Updated", HtmlLink: "https://calendar.google.com/event/evt-1"},
+	}
+	s := newTestServer(fake)
+
+	args, _ := json.Marshal(map[string]interface{}{
+		"event_id":    "evt-1",
+		"summary":     "Updated",
+		"calendar_id": "other@gmail.com",
+	})
+	s.callEditEvent(context.Background(), float64(1), args)
+
+	if fake.lastCalendarID != "other@gmail.com" {
+		t.Errorf("expected calendarID 'other@gmail.com', got %q", fake.lastCalendarID)
 	}
 }
 
